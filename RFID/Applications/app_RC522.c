@@ -25,6 +25,7 @@
 #define SOPT5_UART1RXSRC_UART_RX      0x00u   /*!< UART0 receive data source select: UART0_RX pin */
 #define SOPT5_UART1TXSRC_UART_TX      0x00u   /*!< UART0 transmit data source select: UART0_TX pin */
 
+#define APP_RC522_ID_SIZE	4U
 #define	APP_RC522_KEY_SIZE	6U
 const T_UBYTE caub_RC522_Key[APP_RC522_KEY_SIZE] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 
@@ -32,6 +33,7 @@ const T_UBYTE caub_RC522_Key[APP_RC522_KEY_SIZE] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xF
  * Variables						   *
  ***************************************/
 T_UBYTE raub_RC522_FIFOData[APP_RC522_BUFFER_MAX_LENGTH];
+T_UBYTE raub_CardID[APP_RC522_ID_SIZE];
 T_UWORD ruw_RC522_FIFOReceivedLength;
 T_UBYTE rub_RC522WatchDog;
 static E_RC522_STATES re_RC522State = RC522_STATE_INIT;
@@ -49,6 +51,7 @@ static T_UBYTE app_RC522_ReadBlock(T_UBYTE lub_BlockAddr, T_UBYTE *lpub_recvData
 static void app_RC522_CalculateCRC(T_UBYTE *lpub_Indata, T_UBYTE lub_len, T_UBYTE *lpub_OutData);
 static T_UBYTE app_RC522_Anticoll(T_UBYTE *lpub_serNum);
 static T_UBYTE app_RC522_SelectCard(T_UBYTE *lpub_CardID, T_UBYTE lub_IDSize);
+static T_UBYTE app_RC522_Authenticate(T_UBYTE lub_Command, T_UBYTE lub_BlockAddress, const T_UBYTE *lpub_Key, T_UBYTE *lpub_CardID);
 
 
 /***************************************
@@ -108,6 +111,15 @@ void app_RC522_TaskMng(void)
 				{
 					printf(" %X",raub_RC522_FIFOData[i]);
 				}
+
+				if(i < APP_RC522_ID_SIZE)
+				{
+					raub_CardID[i] = raub_RC522_FIFOData[i];
+				}
+				else
+				{
+					/* Do Nothing */
+				}
 			}
 			printf("\n");
 
@@ -127,7 +139,7 @@ void app_RC522_TaskMng(void)
 
 	case RC522_STATE_SELECT_CARD:
 	{
-		if(app_RC522_SelectCard(raub_RC522_FIFOData, 4) == STATUS_OK)
+		if(app_RC522_SelectCard(raub_CardID, 4) == STATUS_OK)
 		{
 			printf("\nSELECT CARD RESPONSE: ");
 			for(T_UBYTE i = 0; i < ruw_RC522_FIFOReceivedLength; i++)
@@ -146,26 +158,44 @@ void app_RC522_TaskMng(void)
 
 			/* Go to next state after INIT */
 			re_RC522_NextState = RC522_STATE_CARD_SEARCH;
+			/* Reset the Transceiver */
+			re_RC522State = RC522_STATE_AUTHENTICATION;
 		}
 		else
 		{
 			/* Go to next state after INIT */
 			re_RC522_NextState = RC522_STATE_CARD_SEARCH;
+			/* Reset the Transceiver */
+			re_RC522State = RC522_STATE_INIT;
 		}
-		/* Reset the Transceiver */
-		re_RC522State = RC522_STATE_INIT;
-
 
 	}break;
 
 	case RC522_STATE_AUTHENTICATION:
 	{
-		//TODO: Authentication State
+
+		T_UBYTE lub_TrailerBlockIndex = 7U;	//Block Address 7U corresponds to Trailer Block for sector 1
+		if(app_RC522_Authenticate(PICC_CMD_MF_AUTH_KEY_A, lub_TrailerBlockIndex, caub_RC522_Key, raub_CardID) == STATUS_OK)
+		{
+			printf("\nAuthentication Successful");
+			/* Reset the Transceiver */
+			re_RC522State = RC522_STATE_READ_PAGE1;
+		}
+		else
+		{
+			printf("\nAuthentication Failed");
+			/* Reset the Transceiver */
+			re_RC522State = RC522_STATE_INIT;
+		}
+
+
 	}break;
 
 	case RC522_STATE_READ_PAGE1:
 	{
-		if(app_RC522_ReadBlock(1, raub_RC522_FIFOData, &ruw_RC522_FIFOReceivedLength) == STATUS_OK)
+		T_UBYTE lub_BlockAddress = 4U; //Block address 4 corresponds to Block 0 in sector 1
+		ruw_RC522_FIFOReceivedLength = 18U;
+		if(app_RC522_ReadBlock(lub_BlockAddress, raub_RC522_FIFOData, &ruw_RC522_FIFOReceivedLength) == STATUS_OK)
 		{
 
 			printf("\nDATA PAGE 1:\n ");
@@ -180,11 +210,10 @@ void app_RC522_TaskMng(void)
 			printf("\nError Reading Page 1\n");
 		}
 
-		/* Reset the Transceiver */
-		re_RC522State = RC522_STATE_INIT;
 		/* Go to next state after INIT */
 		re_RC522_NextState = RC522_STATE_CARD_SEARCH;
-
+		/* Reset the Transceiver */
+		re_RC522State = RC522_STATE_INIT;
 	}break;
 
 	default:
@@ -587,7 +616,7 @@ static T_UBYTE app_RC522_ToCard(T_UBYTE lub_command, T_UBYTE *lpub_sendData, T_U
 	case PCD_Transceive:
 	{
 		lub_irqEn = 0x77;
-		lub_waitIRq = 0x70;
+		lub_waitIRq = 0x30;
 		break;
 	}
 	default:
@@ -687,7 +716,7 @@ static T_UBYTE app_RC522_ToCard(T_UBYTE lub_command, T_UBYTE *lpub_sendData, T_U
 		}
 		else
 		{
-			/* Do nothing */
+			lub_status = STATUS_OK;
 		}
 	}
 	else
@@ -813,3 +842,28 @@ static T_UBYTE app_RC522_SelectCard(T_UBYTE *lpub_CardID, T_UBYTE lub_IDSize)
 
 
 } // End PICC_Select()
+
+/**********************************************************
+ * Name: app_RC522_Authenticate
+ * Description: Authenticate card to start an encrypted communication
+ **********************************************************/
+static T_UBYTE app_RC522_Authenticate(T_UBYTE lub_Command, T_UBYTE lub_BlockAddress, const T_UBYTE *lpub_Key, T_UBYTE *lpub_CardID)
+{
+	T_UBYTE lub_SendData[12];
+
+	/* Prepare data to send */
+	lub_SendData[0] = lub_Command;
+	lub_SendData[1] = lub_BlockAddress;
+	/* Store Key */
+	for(T_UBYTE i = 0; i < APP_RC522_KEY_SIZE; i++)
+	{
+		lub_SendData[2 + i] = *(lpub_Key + i);
+	}
+	/* Store ID */
+	for (T_UBYTE i = 0; i < 4; i++)
+	{
+		lub_SendData[8 + i] = *(lpub_CardID + i);
+	}
+
+	return app_RC522_ToCard(PCD_MFAuthent, lub_SendData, sizeof(lub_SendData), raub_RC522_FIFOData, &ruw_RC522_FIFOReceivedLength);
+}
