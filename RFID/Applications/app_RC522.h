@@ -71,9 +71,11 @@ enum PICC_Command {
 
 typedef enum
 {
-	RC522_STATE_INIT,
-	RC522_STATE_CARD_SEARCH,
-	RC522_STATE_GET_ID_CARD,
+	RC522_STATE_INIT,			// Init State. Used for Driver initialization
+	RC522_STATE_CARD_SEARCH,	// Card Search Request.
+	RC522_STATE_GET_ID_CARD,	// Get ID from Card present
+	RC522_STATE_SELECT_CARD,	// Select CARD to operate
+	RC522_STATE_AUTHENTICATION,	// Authentication State
 	RC522_STATE_READ_PAGE1,
 	RC522_N_STATES
 }E_RC522_STATES;

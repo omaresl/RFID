@@ -16,10 +16,17 @@
 #include "fsl_uart.h"
 #include "app_GPIO.h"
 
+
+/***************************************
+ * Constants						   *
+ ***************************************/
 #define SOPT5_UART0RXSRC_UART_RX      0x00u   /*!< UART0 receive data source select: UART0_RX pin */
 #define SOPT5_UART0TXSRC_UART_TX      0x00u   /*!< UART0 transmit data source select: UART0_TX pin */
 #define SOPT5_UART1RXSRC_UART_RX      0x00u   /*!< UART0 receive data source select: UART0_RX pin */
 #define SOPT5_UART1TXSRC_UART_TX      0x00u   /*!< UART0 transmit data source select: UART0_TX pin */
+
+#define	APP_RC522_KEY_SIZE	6U
+const T_UBYTE caub_RC522_Key[APP_RC522_KEY_SIZE] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 
 /***************************************
  * Variables						   *
@@ -41,6 +48,7 @@ static T_UBYTE app_RC522_ToCard(T_UBYTE lub_command, T_UBYTE *lpub_sendData, T_U
 static T_UBYTE app_RC522_ReadBlock(T_UBYTE lub_BlockAddr, T_UBYTE *lpub_recvData, T_UWORD *luw_unLen);
 static void app_RC522_CalculateCRC(T_UBYTE *lpub_Indata, T_UBYTE lub_len, T_UBYTE *lpub_OutData);
 static T_UBYTE app_RC522_Anticoll(T_UBYTE *lpub_serNum);
+static T_UBYTE app_RC522_SelectCard(T_UBYTE *lpub_CardID, T_UBYTE lub_IDSize);
 
 
 /***************************************
@@ -69,7 +77,8 @@ void app_RC522_TaskMng(void)
 			printf("\n****Card Present****\n ");
 
 			/* Go to next state after INIT */
-			re_RC522_NextState = RC522_STATE_GET_ID_CARD;
+			re_RC522_NextState = RC522_STATE_CARD_SEARCH;
+			re_RC522State = RC522_STATE_GET_ID_CARD;
 		}
 		else
 		{
@@ -77,11 +86,9 @@ void app_RC522_TaskMng(void)
 
 			/* Go to next state after INIT */
 			re_RC522_NextState = RC522_STATE_CARD_SEARCH;
+			/* Reset the Transceiver */
+			re_RC522State = RC522_STATE_INIT;
 		}
-
-		/* Reset the Transceiver */
-		re_RC522State = RC522_STATE_GET_ID_CARD;//RC522_STATE_INIT;
-
 
 	}break;
 
@@ -105,7 +112,40 @@ void app_RC522_TaskMng(void)
 			printf("\n");
 
 			/* Go to next state after INIT */
-			re_RC522_NextState = RC522_STATE_READ_PAGE1;
+			re_RC522_NextState = RC522_STATE_CARD_SEARCH;
+			/* Reset the Transceiver */
+			re_RC522State = RC522_STATE_SELECT_CARD;
+		}
+		else
+		{
+			/* Go to next state after INIT */
+			re_RC522_NextState = RC522_STATE_CARD_SEARCH;
+			/* Reset the Transceiver */
+			re_RC522State = RC522_STATE_INIT;
+		}
+	}break;
+
+	case RC522_STATE_SELECT_CARD:
+	{
+		if(app_RC522_SelectCard(raub_RC522_FIFOData, 4) == STATUS_OK)
+		{
+			printf("\nSELECT CARD RESPONSE: ");
+			for(T_UBYTE i = 0; i < ruw_RC522_FIFOReceivedLength; i++)
+			{
+				if(raub_RC522_FIFOData[i] < 0x10)
+				{
+					printf(" 0");
+					printf("%X",raub_RC522_FIFOData[i]);
+				}
+				else
+				{
+					printf(" %X",raub_RC522_FIFOData[i]);
+				}
+			}
+			printf("\n");
+
+			/* Go to next state after INIT */
+			re_RC522_NextState = RC522_STATE_CARD_SEARCH;
 		}
 		else
 		{
@@ -114,7 +154,15 @@ void app_RC522_TaskMng(void)
 		}
 		/* Reset the Transceiver */
 		re_RC522State = RC522_STATE_INIT;
+
+
 	}break;
+
+	case RC522_STATE_AUTHENTICATION:
+	{
+		//TODO: Authentication State
+	}break;
+
 	case RC522_STATE_READ_PAGE1:
 	{
 		if(app_RC522_ReadBlock(1, raub_RC522_FIFOData, &ruw_RC522_FIFOReceivedLength) == STATUS_OK)
@@ -291,15 +339,19 @@ void app_RC522_Init(void)
 
 	UART_SetBaudRate(APP_RC522_UART_CHANNEL, 115200, CLOCK_GetFreq(BUS_CLK));
 #endif
+
+	// Reset baud rates
+	app_RC522_WriteRegister(TxModeReg, 0x00);
+	app_RC522_WriteRegister(RxModeReg, 0x00);
 	// Reset ModWidthReg
 	lub_Result |= app_RC522_WriteRegister(ModWidthReg, 0x26);
 	// When communicating with a PICC we need a timeout if something goes wrong.
 	// f_timer = 13.56 MHz / (2*TPreScaler+1) where TPreScaler = [TPrescaler_Hi:TPrescaler_Lo].
 	// TPrescaler_Hi are the four low bits in TModeReg. TPrescaler_Lo is TPrescalerReg.
-	lub_Result |= app_RC522_WriteRegister(TModeReg, 0x8D);			// TAuto=1; timer starts automatically at the end of the transmission in all communication modes at all speeds
-	lub_Result |= app_RC522_WriteRegister(TPrescalerReg, 0x3E);		// TPreScaler = TModeReg[3..0]:TPrescalerReg, ie 0x0A9 = 169 => f_timer=40kHz, ie a timer period of 25μs.
-	lub_Result |= app_RC522_WriteRegister(TReloadRegH, 0x030);		// Reload timer with 0x3E8 = 1000, ie 25ms before timeout.
-	lub_Result |= app_RC522_WriteRegister(TReloadRegL, 0x00);
+	lub_Result |= app_RC522_WriteRegister(TModeReg, 0x80);			// TAuto=1; timer starts automatically at the end of the transmission in all communication modes at all speeds
+	lub_Result |= app_RC522_WriteRegister(TPrescalerReg, 0xA9);		// TPreScaler = TModeReg[3..0]:TPrescalerReg, ie 0x0A9 = 169 => f_timer=40kHz, ie a timer period of 25μs.
+	lub_Result |= app_RC522_WriteRegister(TReloadRegH, 0x03);		// Reload timer with 0x3E8 = 1000, ie 25ms before timeout.
+	lub_Result |= app_RC522_WriteRegister(TReloadRegL, 0xE8);
 
 	lub_Result |= app_RC522_WriteRegister(TxASKReg, 0x40);		// Default 0x00. Force a 100 % ASK modulation independent of the ModGsPReg register setting
 	lub_Result |= app_RC522_WriteRegister(ModeReg, 0x3D);		// Default 0x3F. Set the preset value for the CRC coprocessor for the CalcCRC command to 0x6363 (ISO 14443-3 part 6.2.4)
@@ -386,13 +438,21 @@ T_UBYTE app_RC522_WriteRegister(T_UBYTE lub_Address, T_UBYTE lub_Value)
 }
 
 /**********************************************************
- * Name: app_RC522_RequestReadRegister
- * Description: This function writes a register from RC522 chip and
- * return the value
+ * Name: app_RC522_AntennaOn
+ * Description: This function turns on the RFID Antenna
  **********************************************************/
 static void app_RC522_AntennaOn(void)
 {
 	app_RC522_SetRegisterBitMask(TxControlReg, 0x03);
+}
+
+/**********************************************************
+ * Name: app_RC522_AntennaOff
+ * Description: This function turns off the RFID Antenna
+ **********************************************************/
+static void app_RC522_AntennaOff(void)
+{
+	app_RC522_ClearRegisterBitMask(TxControlReg, 0x03);
 }
 
 /**********************************************************
@@ -662,9 +722,10 @@ static void app_RC522_CalculateCRC(T_UBYTE *lpub_Indata, T_UBYTE lub_len, T_UBYT
 {
 	T_UBYTE i, n;
 
+	app_RC522_WriteRegister(CommandReg, PCD_Idle);
 	app_RC522_ClearRegisterBitMask(DivIrqReg, 0x04);			//CRCIrq = 0
 	app_RC522_SetRegisterBitMask(FIFOLevelReg, 0x80);			//Clear FIFO
-	app_RC522_WriteRegister(CommandReg, PCD_Idle);
+
 
 	/* Write Input Data in FIFO Buffer */
 	for(i = 0; i < lub_len; i++)
@@ -696,7 +757,7 @@ static T_UBYTE app_RC522_Anticoll(T_UBYTE *lpub_serNum)
 
 
 	//ClearBitMask(Status2Reg, 0x08);		//TempSensclear
-	//ClearBitMask(CollReg,0x80);			//ValuesAfterColl
+	app_RC522_ClearRegisterBitMask(CollReg,0x80);			//ValuesAfterColl
 	app_RC522_WriteRegister(BitFramingReg, 0x00);		//TxLastBists = BitFramingReg[2..0]
 
 	lpub_serNum[0] = PICC_CMD_SEL_CL1;
@@ -720,3 +781,35 @@ static T_UBYTE app_RC522_Anticoll(T_UBYTE *lpub_serNum)
 
 	return lub_status;
 }
+
+/**********************************************************
+ * Name: app_RC522_SelectCard
+ * Description: Select a CARD
+ **********************************************************/
+static T_UBYTE app_RC522_SelectCard(T_UBYTE *lpub_CardID, T_UBYTE lub_IDSize)
+{
+	T_UBYTE lub_status = STATUS_ERROR;
+	T_UBYTE laub_BufferToSend[18];
+
+	//Prepare RC522
+	app_RC522_ClearRegisterBitMask(CollReg, 0x80);		// ValuesAfterColl=1 => Bits received after collision are cleared.
+
+	laub_BufferToSend[0] = PICC_CMD_SEL_CL1; //PICC Command
+	laub_BufferToSend[1] = 0x70;	// NVB - Number of Valid Bits: Seven whole bytes
+	/* Store ID */
+	for(T_UBYTE i = 0; i < lub_IDSize; i++)
+	{
+		laub_BufferToSend[2 + i] = *(lpub_CardID + i);
+	}
+	// Calculate BCC - Block Check Character
+	laub_BufferToSend[6] = laub_BufferToSend[2] ^ laub_BufferToSend[3] ^ laub_BufferToSend[4] ^ laub_BufferToSend[5];
+
+	//Calculate CRC_A
+	app_RC522_CalculateCRC(laub_BufferToSend, 7, &laub_BufferToSend[7]);
+
+	lub_status = app_RC522_ToCard(PCD_Transceive, laub_BufferToSend, 9, raub_RC522_FIFOData, &ruw_RC522_FIFOReceivedLength);
+
+	return lub_status;
+
+
+} // End PICC_Select()
