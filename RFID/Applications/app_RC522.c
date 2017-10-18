@@ -45,7 +45,6 @@ static E_RC522_STATES re_RC522_NextState = RC522_STATE_CARD_SEARCH;
 static void app_RC522_AntennaOn(void);
 static void app_RC522_SetRegisterBitMask(T_UBYTE lub_Address,T_UBYTE lub_mask);
 static void app_RC522_ClearRegisterBitMask(T_UBYTE lub_Address,T_UBYTE lub_mask);
-static T_UBYTE app_RC522_RequestA(void);
 static T_UBYTE app_RC522_ToCard(T_UBYTE lub_command, T_UBYTE *lpub_sendData, T_UBYTE lub_sendLen, T_UBYTE *lpub_backData, T_UWORD *lpuw_backLen);
 static T_UBYTE app_RC522_ReadBlock(T_UBYTE lub_BlockAddr, T_UBYTE *lpub_recvData, T_UWORD *luw_unLen);
 static void app_RC522_CalculateCRC(T_UBYTE *lpub_Indata, T_UBYTE lub_len, T_UBYTE *lpub_OutData);
@@ -384,7 +383,6 @@ void app_RC522_Init(void)
 
 	lub_Result |= app_RC522_WriteRegister(TxASKReg, 0x40);		// Default 0x00. Force a 100 % ASK modulation independent of the ModGsPReg register setting
 	lub_Result |= app_RC522_WriteRegister(ModeReg, 0x3D);		// Default 0x3F. Set the preset value for the CRC coprocessor for the CalcCRC command to 0x6363 (ISO 14443-3 part 6.2.4)
-	//lub_Result |= app_RC522_WriteRegister(RFCfgReg, 0x00);		// Default 0x3F. Set the preset value for the CRC coprocessor for the CalcCRC command to 0x6363 (ISO 14443-3 part 6.2.4)
 	app_RC522_AntennaOn();						// Enable the antenna driver pins TX1 and TX2 (they were disabled by the reset)
 }
 
@@ -427,7 +425,7 @@ T_UBYTE app_RC522_WriteRegister(T_UBYTE lub_Address, T_UBYTE lub_Value)
 	T_UBYTE lub_Return;
 	T_UBYTE lub_TempMX;
 
-	lub_Return = TRUE;
+	lub_Return = STATUS_ERROR;
 
 	//Adjust data
 	lub_DataToSend = (lub_Address);
@@ -446,21 +444,20 @@ T_UBYTE app_RC522_WriteRegister(T_UBYTE lub_Address, T_UBYTE lub_Value)
 	if(APP_RC522_COMM_INTERFACE_RECEIVE() == lub_DataToSend)
 	{
 		APP_RC522_COMM_INTERFACE_SEND(lub_Value);
-		lub_TempMX = TRUE;
+
+		lub_TempMX =  GPIO_ReadPinInput(APP_RC_522_MX_GPIO_BASE_ADDR, APP_RC_522_MX_PIN_NUM);
 		while(lub_TempMX == TRUE)
 		{
 			/* Wait Write */
 			lub_TempMX =  GPIO_ReadPinInput(APP_RC_522_MX_GPIO_BASE_ADDR, APP_RC_522_MX_PIN_NUM);
 		}
 
-		lub_Return = FALSE;
+		lub_Return = STATUS_OK;
 	}
 	else
 	{
-		//Reset RC522
-		GPIO_ClearPinsOutput(APP_RC_522_RESET_GPIO_BASE_ADDR, 1U << APP_RC_522_RESET_PIN_NUM);
-
-		GPIO_SetPinsOutput(APP_RC_522_RESET_GPIO_BASE_ADDR, 1U << APP_RC_522_RESET_PIN_NUM);
+		//Address Confirmation Failed
+		lub_Return = STATUS_ERROR;
 	}
 
 	return lub_Return;
@@ -476,33 +473,11 @@ static void app_RC522_AntennaOn(void)
 }
 
 /**********************************************************
- * Name: app_RC522_AntennaOff
- * Description: This function turns off the RFID Antenna
- **********************************************************/
-static void app_RC522_AntennaOff(void)
-{
-	app_RC522_ClearRegisterBitMask(TxControlReg, 0x03);
-}
-
-/**********************************************************
  * Name: app_RC522_IsANewCardPresent
  * Description: This function writes a register from RC522 chip and
  * return the value
  **********************************************************/
 T_UBYTE app_RC522_IsANewCardPresent(void)
-{
-	T_UBYTE result;
-
-	result = app_RC522_RequestA();
-
-	return result;
-} // End PICC_IsNewCardPresent()
-
-/**********************************************************
- * Name: app_RC522_RequestID
- * Description: TBD
- **********************************************************/
-T_UBYTE app_RC522_RequestA(void)
 {
 	T_UBYTE status;
 	T_UBYTE sendData;
@@ -512,55 +487,6 @@ T_UBYTE app_RC522_RequestA(void)
 	sendData = PICC_CMD_REQA;
 
 	status = app_RC522_ToCard(PCD_Transceive, &sendData, 1U, raub_RC522_FIFOData, &ruw_RC522_FIFOReceivedLength);
-	//	app_RC522_WriteRegister(CommIEnReg, 0x00);	//De solicitud de interrupciÃƒÂ³n
-	//	app_RC522_ClearRegisterBitMask(CommIrqReg, 0x80);			// Borrar todos los bits de peticiÃƒÂ³n de interrupciÃƒÂ³n
-	//	app_RC522_SetRegisterBitMask(FIFOLevelReg, 0x80);			//FlushBuffer=1, FIFO de inicializaciÃƒÂ³n
-	//	app_RC522_WriteRegister(CommandReg, PCD_Idle);	//NO action;Y cancelar el comando
-	//
-	//	//Escribir datos en el FIFO
-	//	app_RC522_WriteRegister(FIFODataReg, sendData);
-	//
-	//	//Ejecutar el comando TRANSCEIVE
-	//	app_RC522_WriteRegister(CommandReg, PCD_Transceive);
-	//	app_RC522_SetRegisterBitMask(BitFramingReg, 0x80);		//StartSend=1,transmission of data starts
-	//
-	//	static T_UBYTE lub_IrqFlags;
-	//	lub_IrqFlags = 0;
-	//	while(!(lub_IrqFlags & 0x01) && !((lub_IrqFlags & 0x60) != 0))
-	//	{
-	//		lub_IrqFlags = app_RC522_ReadRegister(CommIrqReg);
-	//	}
-	//
-	//	app_RC522_ClearRegisterBitMask(BitFramingReg, 0x80);
-	//	app_RC522_WriteRegister(CommandReg, PCD_Idle);
-	//
-	//	T_UBYTE lub_Error = app_RC522_ReadRegister(ErrorReg) & 0x1B;
-	//	T_UBYTE lub_LastBits = app_RC522_ReadRegister(ControlReg) & 0x07;
-	//	T_UBYTE lub_BackLen;
-	//	if(lub_Error == FALSE)	//BufferOvfl Collerr CRCErr ProtecolErr
-	//	{
-	//		if(lub_LastBits != 0U)
-	//		{
-	//			lub_BackLen = ((app_RC522_ReadRegister(FIFOLevelReg) - 1)*8) + lub_LastBits;
-	//		}
-	//		else
-	//		{
-	//			lub_BackLen = app_RC522_ReadRegister(FIFOLevelReg)*8;
-	//		}
-	//
-	//		if(lub_BackLen > 0U)
-	//		{
-	//			status = TRUE;
-	//		}
-	//		else
-	//		{
-	//			status = FALSE;
-	//		}
-	//	}
-	//	else
-	//	{
-	//		status = FALSE;
-	//	}
 
 	return status;
 }
@@ -674,14 +600,8 @@ static T_UBYTE app_RC522_ToCard(T_UBYTE lub_command, T_UBYTE *lpub_sendData, T_U
 		if(lub_command == PCD_Transceive)
 		{
 			lub_n = app_RC522_ReadRegister(FIFOLevelReg);
-			//			lub_lastBits = app_RC522_ReadRegister(ControlReg) & 0x07; //Check the last bits validity
-			//			if(lub_lastBits != 0U)
-			//			{
-			//				*lpuw_backLen = (lub_n-1)*8 + lub_lastBits;
-			//			}
-			//			else
-			//			{
-			*lpuw_backLen = lub_n;//*8;
+
+			*lpuw_backLen = lub_n;
 			//			}
 
 			if(lub_n > 0U)
@@ -770,8 +690,7 @@ static void app_RC522_CalculateCRC(T_UBYTE *lpub_Indata, T_UBYTE lub_len, T_UBYT
 	{
 		n = app_RC522_ReadRegister(DivIrqReg);
 	}
-	while( ((n & 0x04) == 0) );//&& //Wait for CRC Calculation
-	//(APP_RC522_TIMER_IS_STOPPED(rub_RC522WatchDog) == FALSE));
+	while( ((n & 0x04) == 0) );
 
 	//Guarda el calculo del CRC
 	lpub_OutData[0] = app_RC522_ReadRegister(CRCResultRegL);
@@ -784,8 +703,6 @@ static T_UBYTE app_RC522_Anticoll(T_UBYTE *lpub_serNum)
 	T_UBYTE i;
 	T_UBYTE lub_serNumCheck=0;
 
-
-	//ClearBitMask(Status2Reg, 0x08);		//TempSensclear
 	app_RC522_ClearRegisterBitMask(CollReg,0x80);			//ValuesAfterColl
 	app_RC522_WriteRegister(BitFramingReg, 0x00);		//TxLastBists = BitFramingReg[2..0]
 
@@ -805,8 +722,6 @@ static T_UBYTE app_RC522_Anticoll(T_UBYTE *lpub_serNum)
 			lub_status = STATUS_ERROR;
 		}
 	}
-
-	//SetBitMask(CollReg, 0x80);		//ValuesAfterColl=1
 
 	return lub_status;
 }
