@@ -38,6 +38,7 @@ T_UWORD ruw_RC522_FIFOReceivedLength;
 T_UBYTE rub_RC522WatchDog;
 static E_RC522_STATES re_RC522State = RC522_STATE_INIT;
 static E_RC522_STATES re_RC522_NextState = RC522_STATE_CARD_SEARCH;
+static T_UBYTE rub_WriteRequestFlag = FALSE;
 
 /***************************************
  * Prototypes						   *
@@ -51,6 +52,7 @@ static void app_RC522_CalculateCRC(T_UBYTE *lpub_Indata, T_UBYTE lub_len, T_UBYT
 static T_UBYTE app_RC522_Anticoll(T_UBYTE *lpub_serNum);
 static T_UBYTE app_RC522_SelectCard(T_UBYTE *lpub_CardID, T_UBYTE lub_IDSize);
 static T_UBYTE app_RC522_Authenticate(T_UBYTE lub_Command, T_UBYTE lub_BlockAddress, const T_UBYTE *lpub_Key, T_UBYTE *lpub_CardID);
+static T_UBYTE app_RC522_WriteBlock(T_UBYTE lub_BlockAddr, T_UBYTE *lpub_recvData, T_UWORD *luw_unLen);
 
 
 /***************************************
@@ -209,6 +211,27 @@ void app_RC522_TaskMng(void)
 			printf("\nError Reading Page 1\n");
 		}
 
+		/*Check if Write Request Exists*/
+		if(rub_WriteRequestFlag == TRUE)
+		{
+			/* Go to next state after INIT */
+			re_RC522_NextState = RC522_STATE_CARD_SEARCH;
+			/* Reset the Transceiver */
+			re_RC522State = RC522_STATE_READ_WRITE;
+		}
+		else
+		{
+			/* Go to next state after INIT */
+			re_RC522_NextState = RC522_STATE_CARD_SEARCH;
+			/* Reset the Transceiver */
+			re_RC522State = RC522_STATE_INIT;
+		}
+	}break;
+
+	case RC522_STATE_READ_WRITE:
+	{
+		rub_WriteRequestFlag = FALSE;
+		(void)app_RC522_WriteBlock(4U, raub_RC522_FIFOData, &ruw_RC522_FIFOReceivedLength);
 		/* Go to next state after INIT */
 		re_RC522_NextState = RC522_STATE_CARD_SEARCH;
 		/* Reset the Transceiver */
@@ -527,7 +550,6 @@ static T_UBYTE app_RC522_ToCard(T_UBYTE lub_command, T_UBYTE *lpub_sendData, T_U
 	T_UBYTE lub_status = STATUS_ERROR;
 	T_UBYTE lub_irqEn = 0x00;
 	T_UBYTE lub_waitIRq = 0x00;
-	//	T_UBYTE lub_lastBits;
 	T_UBYTE lub_n;
 	T_UWORD lub_i;
 
@@ -781,4 +803,35 @@ static T_UBYTE app_RC522_Authenticate(T_UBYTE lub_Command, T_UBYTE lub_BlockAddr
 	}
 
 	return app_RC522_ToCard(PCD_MFAuthent, lub_SendData, sizeof(lub_SendData), raub_RC522_FIFOData, &ruw_RC522_FIFOReceivedLength);
+}
+
+/**********************************************************
+ * Name: app_RC522_WriteBlock
+ * Description: TBD
+ **********************************************************/
+static T_UBYTE app_RC522_WriteBlock(T_UBYTE lub_BlockAddr, T_UBYTE *lpub_recvData, T_UWORD *luw_unLen)
+{
+	T_UBYTE lub_status;
+
+	lpub_recvData[0] = PICC_CMD_MF_WRITE;
+	lpub_recvData[1] = lub_BlockAddr;
+	app_RC522_CalculateCRC(lpub_recvData,2, &lpub_recvData[2]);
+	lub_status = app_RC522_ToCard(PCD_Transceive, lpub_recvData, 4, lpub_recvData, luw_unLen);
+
+	if(lub_status == STATUS_OK)
+	{
+		/* Prepare data to store into CARD */
+		for(T_UBYTE i = 0; i < 16U; i++)
+		{
+			lpub_recvData[i] = i;
+		}
+		app_RC522_CalculateCRC(lpub_recvData, 16, &lpub_recvData[16]);
+		lub_status = app_RC522_ToCard(PCD_Transceive, lpub_recvData, 18, lpub_recvData, luw_unLen);
+	}
+	else
+	{
+		/* Do nothing */
+	}
+
+	return lub_status;
 }

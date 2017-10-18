@@ -12,7 +12,7 @@
 #include "MKL25Z4.h"
 #include "app_uart.h"
 
-#define APP_RC522_BUFFER_MAX_LENGTH	64U
+#define APP_RC522_BUFFER_MAX_LENGTH	20U
 
 // Return codes from the functions in this class. Remember to update GetStatusCodeName() if you add more.
 // last value set to 0xff, then compiler uses less ram, it seems some optimisations are triggered
@@ -77,6 +77,7 @@ typedef enum
 	RC522_STATE_SELECT_CARD,	// Select CARD to operate
 	RC522_STATE_AUTHENTICATION,	// Authentication State
 	RC522_STATE_READ_PAGE1,
+	RC522_STATE_READ_WRITE,		//Write State
 	RC522_N_STATES
 }E_RC522_STATES;
 
